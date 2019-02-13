@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <string>
 #include <fstream>
+#include <cassert>
 #include "thirdparty/fmt/format.h"
 
 namespace CaramelVM {
@@ -100,7 +101,7 @@ namespace CaramelVM {
     };
     struct ConstantUTF8Info {
         uint16_t length;
-        ByteVector bytes;
+        uint8_t *bytes;
     };
     struct ConstantMethodHandleInfo {
         uint16_t referenceKind;
@@ -146,24 +147,25 @@ namespace CaramelVM {
 
     struct ConstantPoolInfo {
         ConstantPoolTag tag;
-
-        ConstantClassInfo classInfo;
-        ConstantFieldRefInfo fieldRefInfo;
-        ConstantInterfaceMethodRefInfo interfaceMethodRefInfo;
-        ConstantMethodRefInfo methodRefInfo;
-        ConstantDoubleInfo doubleInfo;
-        ConstantDynamicInfo dynamicInfo;
-        ConstantFloatInfo floatInfo;
-        ConstantIntegerInfo integerInfo;
-        ConstantInvokeDynamicInfo invokeDynamicInfo;
-        ConstantMethodHandleInfo methodHandleInfo;
-        ConstantUTF8Info utf8Info;
-        ConstantStringInfo stringInfo;
-        ConstantModuleInfo moduleInfo;
-        ConstantMethodTypeInfo methodTypeInfo;
-        ConstantLongInfo longInfo;
-        ConstantNameAndTypeInfo nameAndTypeInfo;
-        ConstantPackageInfo packageInfo;
+        union {
+            ConstantClassInfo classInfo;
+            ConstantFieldRefInfo fieldRefInfo;
+            ConstantInterfaceMethodRefInfo interfaceMethodRefInfo;
+            ConstantMethodRefInfo methodRefInfo;
+            ConstantDoubleInfo doubleInfo;
+            ConstantDynamicInfo dynamicInfo;
+            ConstantFloatInfo floatInfo;
+            ConstantIntegerInfo integerInfo;
+            ConstantInvokeDynamicInfo invokeDynamicInfo;
+            ConstantMethodHandleInfo methodHandleInfo;
+            ConstantUTF8Info utf8Info;
+            ConstantStringInfo stringInfo;
+            ConstantModuleInfo moduleInfo;
+            ConstantMethodTypeInfo methodTypeInfo;
+            ConstantLongInfo longInfo;
+            ConstantNameAndTypeInfo nameAndTypeInfo;
+            ConstantPackageInfo packageInfo;
+        };
 
         ConstantPoolInfo() {}
     };
@@ -206,7 +208,7 @@ namespace CaramelVM {
         uint16_t attributesCount;
         std::vector<AttributeInfo> attributes;
 
-        ClassFile() {}
+        ClassFile() {constantPoolInfo.emplace_back();}
     };
 
     void readConstantPool(ClassFile &classFile, ByteVector::const_iterator &iter) {
@@ -219,9 +221,12 @@ namespace CaramelVM {
 
                 case CONSTANT_Utf8:
                     info.utf8Info.length = readUint2(iter);
-                    for (auto _ = 0; _ < info.utf8Info.length; _++) {
-                        info.utf8Info.bytes.emplace_back(readUint1(iter));
+                    info.utf8Info.bytes = new uint8_t[info.utf8Info.length + 1];
+                    for (auto j = 0; j < info.utf8Info.length; j++) {
+                        info.utf8Info.bytes[j] = readUint1(iter);
                     }
+                    info.utf8Info.bytes[info.utf8Info.length] = 0;
+                    printf("%s\n", info.utf8Info.bytes);
                     break;
                 case CONSTANT_Integer:
                     info.integerInfo.bytes = readUint4(iter);
@@ -262,7 +267,6 @@ namespace CaramelVM {
                 case CONSTANT_MethodHandle:
                     info.methodHandleInfo.referenceKind = readUint2(iter);
                     info.methodHandleInfo.referenceIndex = readUint2(iter);
-
                     break;
                 case CONSTANT_MethodType:
                     info.methodTypeInfo.descriptorIndex = readUint2(iter);
@@ -291,7 +295,7 @@ namespace CaramelVM {
 
     void readAttribute(AttributeInfo &info, ByteVector::const_iterator &iter) {
         info.attributeNameIndex = readUint2(iter);
-        info.attributeLength = readUint2(iter);
+        info.attributeLength = readUint4(iter);
         for (int i = 0; i < info.attributeLength; i++)
             info.info.emplace_back(readUint1(iter));
     }
@@ -299,14 +303,14 @@ namespace CaramelVM {
     void readClassFile(ClassFile &classFile, const ByteVector &data) {
         auto iter = data.begin();
         // read magic
-        iter += 4;
+        auto magic = readUint4(iter);
+        if (magic != 0xcafebabe) {
+            throw std::runtime_error("No a valid class file");
+        }
         auto minor = readUint2(iter);
         auto major = readUint2(iter);
-        fmt::print("major = {} minor = {}\n", major, minor);
         classFile.version = JavaSEVersionString(major, minor);
-        fmt::print("Java SE version: {}\n", classFile.version);
         classFile.constantPoolCount = readUint2(iter);
-        fmt::print("Constant pool count: {}\n", classFile.constantPoolCount);
         readConstantPool(classFile, iter);
         classFile.accessFlags = readUint2(iter);
         classFile.thisClass = readUint2(iter);
@@ -346,15 +350,86 @@ namespace CaramelVM {
             classFile.attributes.emplace_back();
             readAttribute(classFile.attributes.back(), iter);
         }
+        assert(iter == data.end());
+    }
+
+}
+
+const char *format(CaramelVM::ConstantPoolTag tag) {
+    using namespace CaramelVM;
+    switch (tag) {
+        case CONSTANT_Utf8:
+            return "CONSTANT_Utf8";
+        case CONSTANT_Integer:
+            return "CONSTANT_Integer";
+        case CONSTANT_Float:
+            return "CONSTANT_Float";
+        case CONSTANT_Long:
+            return "CONSTANT_Long";
+        case CONSTANT_Double:
+            return "CONSTANT_Double";
+        case CONSTANT_Class:
+            return "CONSTANT_Class";
+        case CONSTANT_String:
+            return "CONSTANT_String";
+        case CONSTANT_Fieldref:
+            return "CONSTANT_Fieldref";
+        case CONSTANT_Methodref:
+            return "CONSTANT_Methodref";
+        case CONSTANT_InterfaceMethodref:
+            return "CONSTANT_InterfaceMethodref";
+        case CONSTANT_NameAndType:
+            return "CONSTANT_NameAndType";
+        case CONSTANT_MethodHandle:
+            return "CONSTANT_MethodHandle";
+        case CONSTANT_MethodType:
+            return "CONSTANT_MethodType";
+        case CONSTANT_Dynamic:
+            return "CONSTANT_Dynamic";
+        case CONSTANT_InvokeDynamic:
+            return "CONSTANT_InvokeDynamic";
+        case CONSTANT_Module:
+            return "CONSTANT_Module";
+        case CONSTANT_Package:
+            return "CONSTANT_Package";
     }
 }
+
+template<>
+struct fmt::formatter<CaramelVM::ClassFile> {
+    template<typename ParseContext>
+    constexpr auto parse(ParseContext &ctx) { return ctx.begin(); }
+
+    template<typename FormatContext>
+    auto format(const CaramelVM::ClassFile &c, FormatContext &ctx) {
+        auto version = fmt::format("Java SE version: {}\n", c.version);
+        auto constPool = fmt::format("Constant Pool Count: {}\n", c.constantPoolCount);
+//        for (const auto &i:c.constantPoolInfo) {
+//            constPool = fmt::format("{}{}\n", constPool, ::format(i.tag));
+//        }
+        auto methods = fmt::format("Method count: {}\n",c.methodsCount);
+        for(const auto&i:c.methods){
+            for(const auto&attr:i.attributes) {
+                assert(c.constantPoolInfo[attr.attributeNameIndex].tag == CaramelVM::CONSTANT_Utf8);
+                methods = fmt::format("{}{}\n", methods, c.constantPoolInfo[attr.attributeNameIndex].utf8Info.bytes);
+            }
+        }
+        auto attributes =fmt::format("Attributes count: {}\n",c.attributesCount);
+        for(const auto&attr:c.attributes) {
+            assert(c.constantPoolInfo[attr.attributeNameIndex].tag == CaramelVM::CONSTANT_Utf8);
+            attributes = fmt::format("{}{}\n", attributes, c.constantPoolInfo[attr.attributeNameIndex].utf8Info.bytes);
+        }
+        return fmt::format_to(ctx.out(), "{}{}{}{}\n", version, constPool, methods,attributes);
+    }
+};
+
 using namespace CaramelVM;
 
 int main() {
     ByteVector data;
     ClassFile classFile;
     readFile("data/hello.class", data);
-    // printBytes(data);
     readClassFile(classFile, data);
+    fmt::print("{}", classFile);
     return 0;
 }
